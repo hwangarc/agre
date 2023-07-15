@@ -1,69 +1,111 @@
 import Head from 'next/head';
 import Footer from '../components/Footer';
-import { client } from '../lib/apollo';
-import { gql } from '@apollo/client';
+import { GraphQLClient, gql } from 'graphql-request';
+import { GetServerSideProps } from 'next';
 
-export default function SlugPage({ post }) {
-  return (
-    <div>
-      <Head>
-        <title>Headless WP Next Starter</title>
-        <link rel="icon" href="favicon.ico" />
-      </Head>
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  const endpoint = process.env.GRAPHQL_ENDPOINT as string;
+  const graphQLClient = new GraphQLClient(endpoint);
+  const referringURL = ctx.req.headers?.referer || null;
+  const path = ctx.req.url; // Sử dụng giá trị đầy đủ của URL hiện tại
 
-      <main>
-        <div className="siteHeader">
-          <h1 className="title">{post.title}</h1>
-          <p>
-            ✍️ &nbsp;&nbsp;
-            {`${post.author.node.firstName} ${post.author.node.lastName}`} | 🗓️ &nbsp;&nbsp;
-            {new Date(post.date).toLocaleDateString()}
-          </p>
-        </div>
-        <article dangerouslySetInnerHTML={{ __html: post.content }}></article>
-      </main>
+  const fbclid = ctx.query.fbclid;
 
-      <Footer></Footer>
-    </div>
-  );
-}
+  // Kiểm tra nếu referer là Facebook hoặc yêu cầu có chứa fbclid
+  if (referringURL?.includes('facebook.com') || fbclid) {
+    return {
+      redirect: {
+        permanent: false,
+        destination: path, // Chuyển hướng đến URL đầy đủ hiện tại
+      },
+    };
+  }
 
-export async function getStaticProps({ params }) {
-  const GET_POST_BY_URI = gql`
-    query GetPostByUri($uri: ID!) {
-      post(id: $uri, idType: URI) {
+  const query = gql`
+    {
+      post(id: "/${path}/", idType: URI) {
+        id
+        excerpt
         title
+        link
+        dateGmt
+        modifiedGmt
         content
-        date
         author {
           node {
-            firstName
-            lastName
+            name
+          }
+        }
+        featuredImage {
+          node {
+            sourceUrl
+            altText
           }
         }
       }
     }
   `;
 
-  const response = await client.query({
-    query: GET_POST_BY_URI,
-    variables: {
-      uri: params.uri,
-    },
-  });
-
-  const post = response?.data?.post;
-
+  const data = await graphQLClient.request(query);
+  if (!data.post) {
+    return {
+      notFound: true,
+    };
+  }
   return {
     props: {
-      post,
+      path,
+      post: data.post,
+      host: ctx.req.headers.host,
     },
   };
+};
+
+interface PostProps {
+  post: any;
+  host: string;
+  path: string;
 }
 
-export async function getStaticPaths() {
-  return {
-    paths: [],
-    fallback: 'blocking',
+const Post: React.FC<PostProps> = (props) => {
+  const { post, host, path } = props;
+
+  // to remove tags from excerpt
+  const removeTags = (str: string) => {
+    if (str === null || str === '') return '';
+    else str = str.toString();
+    return str.replace(/(<([^>]+)>)/gi, '').replace(/\[[^\]]*\]/, '');
   };
-}
+
+  return (
+    <>
+      <Head>
+        <meta property="og:title" content={post.title} />
+        <link rel="canonical" href={`https://${host}${path}`} />
+        <meta property="og:description" content={removeTags(post.excerpt)} />
+        <meta property="og:url" content={`https://${host}${path}`} />
+        <meta property="og:type" content="article" />
+        <meta property="og:locale" content="en_US" />
+        <meta property="og:site_name" content={host.split('.')[0]} />
+        <meta property="article:published_time" content={post.dateGmt} />
+        <meta property="article:modified_time" content={post.modifiedGmt} />
+        <meta property="og:image" content={post.featuredImage.node.sourceUrl} />
+        <meta
+          property="og:image:alt"
+          content={post.featuredImage.node.altText || post.title}
+        />
+        <title>{post.title}</title>
+      </Head>
+      <div className="post-container">
+        <h1>{post.title}</h1>
+        <img
+          src={post.featuredImage.node.sourceUrl}
+          alt={post.featuredImage.node.altText || post.title}
+        />
+        <article dangerouslySetInnerHTML={{ __html: post.content }} />
+      </div>
+    </>
+  );
+};
+
+export default Post;
